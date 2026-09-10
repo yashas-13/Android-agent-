@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">AI Phone Agent</string>
+    <string name="accessibility_service_description">AI Phone Agent uses this accessibility service exclusively to observe permitted screen UI hierarchy, identify interactive elements, and execute user-authorized automation tasks (such as WhatsApp multi-group messaging and phone navigation) with strict safety controls.</string>
+</resources>
