@@ -228,4 +228,92 @@ class AgentArchitectureUnitTest {
         assertNotNull(result2.failureReason)
         assertTrue(result2.failureReason!!.contains("not found"))
     }
+
+    @Test
+    fun testAccessibilityCapabilitiesSchemaAndActions() {
+        // 1. CLICK action
+        val clickAction = AgentAction(
+            action = AgentActionType.CLICK,
+            target = ActionTarget(text = "Settings", role = "button", bounds = ElementBounds(100, 200, 300, 400)),
+            reason = "Click settings button"
+        )
+        assertTrue("CLICK action should be valid", clickAction.isValid())
+        assertEquals(200, clickAction.target?.bounds?.centerX)
+        assertEquals(300, clickAction.target?.bounds?.centerY)
+
+        // 2. TAP action
+        val tapAction = AgentAction(
+            action = AgentActionType.TAP,
+            target = ActionTarget(x = 540f, y = 1200f),
+            reason = "Tap target coordinates"
+        )
+        assertTrue("TAP action should be valid", tapAction.isValid())
+        assertEquals(540f, tapAction.target?.x)
+        assertEquals(1200f, tapAction.target?.y)
+
+        // 3. TYPE_TEXT action
+        val typeAction = AgentAction(
+            action = AgentActionType.TYPE_TEXT,
+            target = ActionTarget(text = "Search field", role = "input"),
+            payload = "Automate Android",
+            reason = "Type search query"
+        )
+        assertTrue("TYPE_TEXT action should be valid with payload", typeAction.isValid())
+        assertEquals("Automate Android", typeAction.payload)
+
+        // 4. SCROLL action
+        val scrollDownAction = AgentAction(
+            action = AgentActionType.SCROLL,
+            payload = "down",
+            reason = "Scroll down in chat list"
+        )
+        assertTrue("SCROLL action should be valid", scrollDownAction.isValid())
+        assertEquals("down", scrollDownAction.payload)
+
+        val scrollUpAction = AgentAction(
+            action = AgentActionType.SCROLL,
+            payload = "up",
+            reason = "Scroll up in chat list"
+        )
+        assertTrue("SCROLL up action should be valid", scrollUpAction.isValid())
+
+        // 5. SCREENSHOT action
+        val screenshotAction = AgentAction(
+            action = AgentActionType.SCREENSHOT,
+            reason = "Capture current screen state"
+        )
+        assertTrue("SCREENSHOT action should be valid", screenshotAction.isValid())
+
+        // 6. SWIPE action
+        val swipeAction = AgentAction(
+            action = AgentActionType.SWIPE,
+            payload = "left",
+            reason = "Swipe left to reveal options"
+        )
+        assertTrue("SWIPE action should be valid", swipeAction.isValid())
+        assertEquals("left", swipeAction.payload)
+    }
+
+    @Test
+    fun testAccessibilityCapabilitiesReportModel() {
+        val report = com.example.accessibility.AccessibilityCapabilitiesReport(
+            isConnected = true,
+            canPerformGestures = true,
+            canRetrieveWindowContent = true,
+            canTakeScreenshot = true,
+            canFilterKeyEvents = true,
+            hasInteractiveWindowsFlag = true,
+            hasReportViewIdsFlag = true,
+            hasIncludeNotImportantViewsFlag = true,
+            serviceInfoSummary = "All capabilities active"
+        )
+
+        assertTrue(report.isConnected)
+        assertTrue(report.canPerformGestures)
+        assertTrue(report.canRetrieveWindowContent)
+        assertTrue(report.canTakeScreenshot)
+        assertTrue(report.canFilterKeyEvents)
+        assertTrue(report.hasInteractiveWindowsFlag)
+        assertTrue(report.hasReportViewIdsFlag)
+    }
 }

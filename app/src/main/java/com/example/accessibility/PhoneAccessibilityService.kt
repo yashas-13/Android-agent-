@@ -1,21 +1,61 @@
 package com.example.accessibility
 
 import android.accessibilityservice.AccessibilityService
+import android.accessibilityservice.AccessibilityServiceInfo
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.Rect
+import android.os.Build
 import android.os.Bundle
+import android.util.Base64
+import android.view.Display
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import com.example.agent.ActionTarget
 import com.example.agent.AgentAction
 import com.example.agent.AgentActionType
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.suspendCancellableCoroutine
+import java.io.ByteArrayOutputStream
+import kotlin.coroutines.resume
+
+data class AccessibilityCapabilitiesReport(
+    val isConnected: Boolean,
+    val canPerformGestures: Boolean,
+    val canRetrieveWindowContent: Boolean,
+    val canTakeScreenshot: Boolean,
+    val canFilterKeyEvents: Boolean,
+    val hasInteractiveWindowsFlag: Boolean,
+    val hasReportViewIdsFlag: Boolean,
+    val hasIncludeNotImportantViewsFlag: Boolean,
+    val serviceInfoSummary: String
+)
 
 class PhoneAccessibilityService : AccessibilityService() {
 
     override fun onServiceConnected() {
         super.onServiceConnected()
+        try {
+            val info = serviceInfo ?: AccessibilityServiceInfo()
+            info.eventTypes = AccessibilityEvent.TYPES_ALL_MASK
+            info.feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
+            info.notificationTimeout = 50
+            info.flags = info.flags or
+                AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS or
+                AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS or
+                AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS or
+                AccessibilityServiceInfo.FLAG_REQUEST_TOUCH_EXPLORATION_MODE or
+                AccessibilityServiceInfo.FLAG_REQUEST_FILTER_KEY_EVENTS
+            serviceInfo = info
+        } catch (e: Exception) {
+            // Service reconfiguration handled gracefully
+        }
         instance = this
         _isServiceConnected.value = true
         captureCurrentHierarchy()
@@ -66,7 +106,8 @@ class PhoneAccessibilityService : AccessibilityService() {
 
     suspend fun executeAction(action: AgentAction): Boolean {
         return when (action.action) {
-            AgentActionType.CLICK, AgentActionType.TAP -> executeClick(action.target)
+            AgentActionType.CLICK -> executeClick(action.target)
+            AgentActionType.TAP -> executeTap(action.target)
             AgentActionType.LONG_CLICK -> executeLongClick(action.target)
             AgentActionType.TYPE_TEXT -> executeTypeText(action.target, action.payload ?: "")
             AgentActionType.CLEAR_TEXT -> executeClearText(action.target)
@@ -99,16 +140,29 @@ class PhoneAccessibilityService : AccessibilityService() {
                 }
                 curr = curr.parent
             }
+
+            // Fallback: If node marked unclickable or ACTION_CLICK returned false, click its center coordinate
+            val rect = Rect()
+            node.getBoundsInScreen(rect)
+            if (!rect.isEmpty) {
+                return GestureHelper.clickAt(this, rect.exactCenterX(), rect.exactCenterY(), durationMs = 100L)
+            }
         }
 
         // Strategy 2: Fallback to gesture coordinates
         val x = target.x ?: target.bounds?.centerX?.toFloat()
         val y = target.y ?: target.bounds?.centerY?.toFloat()
         if (x != null && y != null) {
-            return GestureHelper.clickAt(this, x, y)
+            return GestureHelper.clickAt(this, x, y, durationMs = 100L)
         }
 
         return false
+    }
+
+    private suspend fun executeTap(target: ActionTarget?): Boolean {
+        val x = target?.x ?: target?.bounds?.centerX?.toFloat() ?: 540f
+        val y = target?.y ?: target?.bounds?.centerY?.toFloat() ?: 1200f
+        return GestureHelper.clickAt(this, x, y, durationMs = 80L)
     }
 
     private suspend fun executeLongClick(target: ActionTarget?): Boolean {
@@ -129,7 +183,7 @@ class PhoneAccessibilityService : AccessibilityService() {
         return false
     }
 
-    private fun executeTypeText(target: ActionTarget?, text: String): Boolean {
+    private suspend fun executeTypeText(target: ActionTarget?, text: String): Boolean {
         var node = findMatchingNode(target)
 
         // If target not directly found or not editable, try finding currently focused or any editable field
@@ -145,7 +199,30 @@ class PhoneAccessibilityService : AccessibilityService() {
             val arguments = Bundle().apply {
                 putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
             }
-            return node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, arguments)
+            val textSet = node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, arguments)
+            if (textSet) return true
+
+            // Fallback 1: Clipboard paste
+            try {
+                val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                if (clipboard != null) {
+                    val clip = ClipData.newPlainText("agent_text", text)
+                    clipboard.setPrimaryClip(clip)
+                    val pasted = node.performAction(AccessibilityNodeInfo.ACTION_PASTE)
+                    if (pasted) return true
+                }
+            } catch (e: Exception) {
+                // Clipboard fallback ignored on security exceptions
+            }
+
+            // Fallback 2: Tap the editable node center and try ACTION_SET_TEXT again
+            val rect = Rect()
+            node.getBoundsInScreen(rect)
+            if (!rect.isEmpty) {
+                GestureHelper.clickAt(this, rect.exactCenterX(), rect.exactCenterY(), durationMs = 80L)
+                delay(120L)
+                return node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, arguments)
+            }
         }
 
         return false
@@ -276,33 +353,60 @@ class PhoneAccessibilityService : AccessibilityService() {
         return GestureHelper.clickAt(this, 1000f, 2250f)
     }
 
-    private fun executeScreenshotCapture(): Boolean {
+    suspend fun executeScreenshotCapture(): Boolean {
         captureCurrentHierarchy()
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
-            try {
-                takeScreenshot(
-                    android.view.Display.DEFAULT_DISPLAY,
-                    mainExecutor,
-                    object : AccessibilityService.TakeScreenshotCallback {
-                        override fun onSuccess(screenshotResult: AccessibilityService.ScreenshotResult) {
-                            // Screenshot successfully captured by system accessibility service
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val bitmap = suspendCancellableCoroutine<Bitmap?> { cont ->
+                try {
+                    takeScreenshot(
+                        Display.DEFAULT_DISPLAY,
+                        mainExecutor,
+                        object : AccessibilityService.TakeScreenshotCallback {
+                            override fun onSuccess(screenshotResult: AccessibilityService.ScreenshotResult) {
+                                try {
+                                    val hwBuffer = screenshotResult.hardwareBuffer
+                                    val colorSpace = screenshotResult.colorSpace
+                                    val bmp = Bitmap.wrapHardwareBuffer(hwBuffer, colorSpace)
+                                    val softwareCopy = bmp?.copy(Bitmap.Config.ARGB_8888, false)
+                                    hwBuffer.close()
+                                    if (cont.isActive) cont.resume(softwareCopy)
+                                } catch (e: Exception) {
+                                    if (cont.isActive) cont.resume(null)
+                                }
+                            }
+
+                            override fun onFailure(errorCode: Int) {
+                                if (cont.isActive) cont.resume(null)
+                            }
                         }
-                        override fun onFailure(errorCode: Int) {
-                            // Fallback hierarchy remains available
-                        }
-                    }
-                )
-            } catch (e: Exception) {
-                // Keep hierarchy snapshot
+                    )
+                } catch (e: Exception) {
+                    if (cont.isActive) cont.resume(null)
+                }
+            }
+
+            if (bitmap != null) {
+                _latestScreenshotBitmap.value = bitmap
+                val base64 = encodeBitmapToBase64(bitmap)
+                _latestSnapshot.value = _latestSnapshot.value?.copy(screenshotBase64 = base64)
+                return true
             }
         }
         return true
     }
 
+    private fun encodeBitmapToBase64(bitmap: Bitmap): String {
+        val stream = ByteArrayOutputStream()
+        bitmap.compress(Bitmap.CompressFormat.JPEG, 75, stream)
+        val bytes = stream.toByteArray()
+        return Base64.encodeToString(bytes, Base64.NO_WRAP)
+    }
+
     private suspend fun executeScroll(target: ActionTarget?, direction: String?): Boolean {
+        val dir = direction?.lowercase()?.trim() ?: "down"
         val node = findMatchingNode(target) ?: findFirstScrollableNode(rootInActiveWindow)
         if (node != null) {
-            val action = if (direction?.lowercase() == "backward" || direction?.lowercase() == "up") {
+            val action = if (dir == "backward" || dir == "up") {
                 AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD
             } else {
                 AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
@@ -311,9 +415,35 @@ class PhoneAccessibilityService : AccessibilityService() {
         }
 
         // Gesture fallback
-        val startY = 1300f
-        val endY = 600f
-        return GestureHelper.swipe(this, 540f, startY, 540f, endY)
+        val b = target?.bounds
+        val (startX, startY, endX, endY) = when (dir) {
+            "up", "backward" -> {
+                val x = b?.centerX?.toFloat() ?: 540f
+                val y1 = b?.top?.toFloat() ?: 600f
+                val y2 = b?.bottom?.toFloat() ?: 1500f
+                arrayOf(x, y1, x, y2)
+            }
+            "left" -> {
+                val y = b?.centerY?.toFloat() ?: 1000f
+                val x1 = b?.right?.toFloat() ?: 900f
+                val x2 = b?.left?.toFloat() ?: 180f
+                arrayOf(x1, y, x2, y)
+            }
+            "right" -> {
+                val y = b?.centerY?.toFloat() ?: 1000f
+                val x1 = b?.left?.toFloat() ?: 180f
+                val x2 = b?.right?.toFloat() ?: 900f
+                arrayOf(x1, y, x2, y)
+            }
+            else -> { // "down", "forward"
+                val x = b?.centerX?.toFloat() ?: 540f
+                val y1 = b?.bottom?.toFloat() ?: 1500f
+                val y2 = b?.top?.toFloat() ?: 600f
+                arrayOf(x, y1, x, y2)
+            }
+        }
+
+        return GestureHelper.swipe(this, startX, startY, endX, endY, durationMs = 350L)
     }
 
     private fun executeOpenApp(packageName: String): Boolean {
@@ -409,6 +539,75 @@ class PhoneAccessibilityService : AccessibilityService() {
         return null
     }
 
+    fun getCapabilitiesReport(): AccessibilityCapabilitiesReport {
+        val info = serviceInfo
+        val flags = info?.flags ?: 0
+        val hasInteractive = (flags and AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS) != 0
+        val hasReportIds = (flags and AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS) != 0
+        val hasNotImportant = (flags and AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS) != 0
+        val canFilterKeys = (flags and AccessibilityServiceInfo.FLAG_REQUEST_FILTER_KEY_EVENTS) != 0
+
+        val gestures = info?.let {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                (it.capabilities and AccessibilityServiceInfo.CAPABILITY_CAN_PERFORM_GESTURES) != 0
+            } else false
+        } ?: (instance != null)
+
+        val windowContent = info?.let {
+            (it.capabilities and AccessibilityServiceInfo.CAPABILITY_CAN_RETRIEVE_WINDOW_CONTENT) != 0
+        } ?: (instance != null)
+
+        val screenshot = info?.let {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                (it.capabilities and AccessibilityServiceInfo.CAPABILITY_CAN_TAKE_SCREENSHOT) != 0
+            } else false
+        } ?: (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R)
+
+        return AccessibilityCapabilitiesReport(
+            isConnected = _isServiceConnected.value,
+            canPerformGestures = gestures,
+            canRetrieveWindowContent = windowContent,
+            canTakeScreenshot = screenshot,
+            canFilterKeyEvents = canFilterKeys,
+            hasInteractiveWindowsFlag = hasInteractive,
+            hasReportViewIdsFlag = hasReportIds,
+            hasIncludeNotImportantViewsFlag = hasNotImportant,
+            serviceInfoSummary = info?.toString() ?: "Service ready / connected=${_isServiceConnected.value}"
+        )
+    }
+
+    suspend fun testExecuteClick(x: Float = 540f, y: Float = 1000f): Boolean {
+        return GestureHelper.clickAt(this, x, y, durationMs = 100L)
+    }
+
+    suspend fun testExecuteTap(x: Float = 540f, y: Float = 1000f): Boolean {
+        return GestureHelper.clickAt(this, x, y, durationMs = 80L)
+    }
+
+    suspend fun testExecuteTypeText(text: String = "Test AI Agent Input"): Boolean {
+        val root = rootInActiveWindow
+        val target = findFirstEditableNode(root) ?: root?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+        if (target != null) {
+            val args = Bundle().apply {
+                putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
+            }
+            return target.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+        }
+        return false
+    }
+
+    suspend fun testExecuteScroll(direction: String = "down"): Boolean {
+        return executeScroll(null, direction)
+    }
+
+    suspend fun testExecuteSwipe(direction: String = "up"): Boolean {
+        return executeSwipeWithDirection(null, direction)
+    }
+
+    suspend fun testExecuteScreenshot(): Boolean {
+        return executeScreenshotCapture()
+    }
+
     companion object {
         @Volatile
         var instance: PhoneAccessibilityService? = null
@@ -419,6 +618,9 @@ class PhoneAccessibilityService : AccessibilityService() {
 
         private val _latestSnapshot = MutableStateFlow<ScreenSnapshot?>(null)
         val latestSnapshot: StateFlow<ScreenSnapshot?> = _latestSnapshot.asStateFlow()
+
+        private val _latestScreenshotBitmap = MutableStateFlow<Bitmap?>(null)
+        val latestScreenshotBitmap: StateFlow<Bitmap?> = _latestScreenshotBitmap.asStateFlow()
 
         private val _currentPackageName = MutableStateFlow("")
         val currentPackageName: StateFlow<String> = _currentPackageName.asStateFlow()

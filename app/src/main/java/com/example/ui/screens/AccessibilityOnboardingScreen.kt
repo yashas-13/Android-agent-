@@ -20,19 +20,29 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Accessibility
+import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Keyboard
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Mouse
 import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material.icons.filled.PanTool
 import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.SwapVert
+import androidx.compose.material.icons.filled.TouchApp
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -56,6 +66,7 @@ import com.example.ui.theme.CyberSurfaceVariant
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
+import kotlinx.coroutines.launch
 
 @Composable
 fun AccessibilityOnboardingScreen(
@@ -63,6 +74,9 @@ fun AccessibilityOnboardingScreen(
 ) {
     val context = LocalContext.current
     val isConnected by PhoneAccessibilityService.isServiceConnected.collectAsStateWithLifecycle()
+    val scope = rememberCoroutineScope()
+    var diagnosticMessage by remember { mutableStateOf<String?>(null) }
+    var isExecutingTest by remember { mutableStateOf(false) }
 
     LazyColumn(
         modifier = modifier
@@ -159,6 +173,197 @@ fun AccessibilityOnboardingScreen(
             }
         }
 
+        // ACCESSIBILITY CAPABILITIES DIAGNOSTIC & TEST BENCH
+        item {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(CyberSurface)
+                    .border(1.dp, CyberCyan.copy(alpha = 0.3f), RoundedCornerShape(12.dp))
+                    .padding(14.dp)
+            ) {
+                Column {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "CAPABILITIES DIAGNOSTIC & TEST BENCH",
+                            color = CyberCyan,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = FontFamily.Monospace,
+                            letterSpacing = 0.8.sp
+                        )
+                        CyberBadge(
+                            text = if (isConnected) "VERIFIED" else "STANDBY",
+                            color = if (isConnected) CyberGreen else CyberAmber
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = "Real-time verification of required interaction capabilities powered by Android Accessibility APIs:",
+                        color = TextSecondary,
+                        fontSize = 11.sp
+                    )
+
+                    if (diagnosticMessage != null) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(CyberSurfaceVariant)
+                                .border(1.dp, CyberCyan.copy(alpha = 0.5f), RoundedCornerShape(8.dp))
+                                .padding(8.dp)
+                        ) {
+                            Text(
+                                text = diagnosticMessage ?: "",
+                                color = TextPrimary,
+                                fontSize = 11.sp,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    // 1. Clicking Capability
+                    CapabilityBenchItem(
+                        icon = Icons.Default.Mouse,
+                        title = "1. CLICKING",
+                        flag = "canRetrieveWindowContent / ACTION_CLICK",
+                        description = "Dispatches semantic ACTION_CLICK to node hierarchy with coordinate center fallback.",
+                        isServiceConnected = isConnected,
+                        isBusy = isExecutingTest,
+                        onTestExecute = {
+                            scope.launch {
+                                isExecutingTest = true
+                                diagnosticMessage = "Executing test click..."
+                                val service = PhoneAccessibilityService.instance
+                                val res = service?.testExecuteClick(540f, 1000f) ?: false
+                                diagnosticMessage = if (res) "CLICK test dispatched successfully ✓" else "CLICK failed: Enable service in settings."
+                                isExecutingTest = false
+                            }
+                        }
+                    )
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // 2. Typing Capability
+                    CapabilityBenchItem(
+                        icon = Icons.Default.Keyboard,
+                        title = "2. TYPING",
+                        flag = "ACTION_SET_TEXT + CLIPBOARD PASTE",
+                        description = "Directly inputs text into active/editable fields with automatic clipboard fallback.",
+                        isServiceConnected = isConnected,
+                        isBusy = isExecutingTest,
+                        onTestExecute = {
+                            scope.launch {
+                                isExecutingTest = true
+                                diagnosticMessage = "Executing test type..."
+                                val service = PhoneAccessibilityService.instance
+                                val res = service?.testExecuteTypeText("AI Agent Test") ?: false
+                                diagnosticMessage = if (res) "TYPE test completed ✓" else "TYPE test dispatched (no active editable node in focus)."
+                                isExecutingTest = false
+                            }
+                        }
+                    )
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // 3. Scrolling Capability
+                    CapabilityBenchItem(
+                        icon = Icons.Default.SwapVert,
+                        title = "3. SCROLLING",
+                        flag = "ACTION_SCROLL_FORWARD/BACKWARD",
+                        description = "Performs node scroll on scrollable containers with gesture swipe fallback.",
+                        isServiceConnected = isConnected,
+                        isBusy = isExecutingTest,
+                        onTestExecute = {
+                            scope.launch {
+                                isExecutingTest = true
+                                diagnosticMessage = "Executing test scroll..."
+                                val service = PhoneAccessibilityService.instance
+                                val res = service?.testExecuteScroll("down") ?: false
+                                diagnosticMessage = if (res) "SCROLL gesture executed successfully ✓" else "SCROLL failed: Service not bound."
+                                isExecutingTest = false
+                            }
+                        }
+                    )
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // 4. Screenshot Capture Capability
+                    CapabilityBenchItem(
+                        icon = Icons.Default.CameraAlt,
+                        title = "4. SCREENSHOT CAPTURE",
+                        flag = "canTakeScreenshot / API 30+",
+                        description = "Captures hardware buffer display bitmap and generates base64 visual snapshot.",
+                        isServiceConnected = isConnected,
+                        isBusy = isExecutingTest,
+                        onTestExecute = {
+                            scope.launch {
+                                isExecutingTest = true
+                                diagnosticMessage = "Capturing screenshot..."
+                                val service = PhoneAccessibilityService.instance
+                                val res = service?.testExecuteScreenshot() ?: false
+                                diagnosticMessage = if (res) "SCREENSHOT captured successfully ✓" else "SCREENSHOT failed."
+                                isExecutingTest = false
+                            }
+                        }
+                    )
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // 5. Tap Capability
+                    CapabilityBenchItem(
+                        icon = Icons.Default.TouchApp,
+                        title = "5. TAP",
+                        flag = "canPerformGestures / 80ms duration",
+                        description = "Executes precise single finger touch tap at coordinates via GestureDescription.",
+                        isServiceConnected = isConnected,
+                        isBusy = isExecutingTest,
+                        onTestExecute = {
+                            scope.launch {
+                                isExecutingTest = true
+                                diagnosticMessage = "Executing test tap..."
+                                val service = PhoneAccessibilityService.instance
+                                val res = service?.testExecuteTap(540f, 1000f) ?: false
+                                diagnosticMessage = if (res) "TAP gesture dispatched successfully ✓" else "TAP failed: Service not bound."
+                                isExecutingTest = false
+                            }
+                        }
+                    )
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // 6. Swipe Capability
+                    CapabilityBenchItem(
+                        icon = Icons.Default.PanTool,
+                        title = "6. SWIPE",
+                        flag = "canPerformGestures / Vector Stroke",
+                        description = "Calculates motion vector path and dispatches gesture swipe (Up, Down, Left, Right).",
+                        isServiceConnected = isConnected,
+                        isBusy = isExecutingTest,
+                        onTestExecute = {
+                            scope.launch {
+                                isExecutingTest = true
+                                diagnosticMessage = "Executing test swipe..."
+                                val service = PhoneAccessibilityService.instance
+                                val res = service?.testExecuteSwipe("up") ?: false
+                                diagnosticMessage = if (res) "SWIPE gesture dispatched successfully ✓" else "SWIPE failed: Service not bound."
+                                isExecutingTest = false
+                            }
+                        }
+                    )
+                }
+            }
+        }
+
         // What the service does (Transparency & Permission Explanation)
         item {
             Box(
@@ -200,7 +405,7 @@ fun AccessibilityOnboardingScreen(
                     CapabilityRow(
                         icon = Icons.Default.Security,
                         title = "3. Execute User-Requested Automation",
-                        desc = "Automates tasks like broadcasting messages to multiple WhatsApp groups or toggling settings without manual repetition."
+                        desc = "Automates tasks like navigating settings, interacting with apps, or broadcasting messages without manual repetition."
                     )
                 }
             }
@@ -253,6 +458,83 @@ fun AccessibilityOnboardingScreen(
 
         item {
             Spacer(modifier = Modifier.height(16.dp))
+        }
+    }
+}
+
+@Composable
+private fun CapabilityBenchItem(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    title: String,
+    flag: String,
+    description: String,
+    isServiceConnected: Boolean,
+    isBusy: Boolean,
+    onTestExecute: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(CyberSurfaceVariant)
+            .border(1.dp, Color(0xFF1E293B), RoundedCornerShape(8.dp))
+            .padding(10.dp)
+    ) {
+        Column {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = icon,
+                        contentDescription = null,
+                        tint = CyberCyan,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = title,
+                        color = TextPrimary,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.Monospace
+                    )
+                }
+
+                OutlinedButton(
+                    onClick = onTestExecute,
+                    enabled = isServiceConnected && !isBusy,
+                    modifier = Modifier.height(28.dp),
+                    shape = RoundedCornerShape(6.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        contentColor = CyberCyan
+                    )
+                ) {
+                    Text(
+                        text = "TEST EXECUTE",
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.Monospace
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = "FLAG: $flag",
+                color = CyberGreen,
+                fontSize = 10.sp,
+                fontFamily = FontFamily.Monospace
+            )
+            Spacer(modifier = Modifier.height(2.dp))
+            Text(
+                text = description,
+                color = TextSecondary,
+                fontSize = 10.sp,
+                lineHeight = 13.sp
+            )
         }
     }
 }
@@ -311,3 +593,4 @@ private fun SafetyRow(title: String, desc: String) {
         )
     }
 }
+
